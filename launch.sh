@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Note about VPN simulation
+echo "VPN simulation will be handled inside the container on Ubuntu..."
+# The modprobe dummy command is not needed on macOS and will be handled inside the container
+
 # Build the Docker image
 echo "Building Docker image..."
 docker build -t self-healing-linux .
@@ -11,9 +15,12 @@ if [ "$(docker ps -a -q -f name=self-healing-demo)" ]; then
   docker rm self-healing-demo
 fi
 
-# Run the container with env file
-echo "Starting self-healing demo container..."
+# Run the container with env file and necessary privileges
+echo "Starting self-healing demo container with network privileges..."
 docker run -d --name self-healing-demo \
+  --privileged \
+  --cap-add=NET_ADMIN \
+  --cap-add=SYS_MODULE \
   -p 2222:22 \
   -p 8080:80 \
   --env-file .env \
@@ -26,7 +33,10 @@ echo "Container started! You can view logs with:"
 echo "docker logs self-healing-demo"
 echo ""
 echo "Test service failure with:"
-echo "docker exec -it self-healing-demo /app/test-break.sh"
+echo "docker exec -it self-healing-demo /app/break-service.sh"
+echo ""
+echo "Debug random service selection:"
+echo "docker exec -it self-healing-demo /app/check-random.sh"
 echo ""
 echo "To see continuous logs:"
 echo "docker logs -f self-healing-demo"

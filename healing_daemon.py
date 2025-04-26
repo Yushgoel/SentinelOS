@@ -27,7 +27,7 @@ class SelfHealingDaemon:
     def __init__(self, api_key=None, auto_fix=True):
         self.api_key = api_key
         self.auto_fix = auto_fix
-        self.monitored_services = ["ssh", "apache2"]
+        self.monitored_services = ["ssh", "apache2", "vpn"]
         self.service_status = {}
         self.api_url = "https://api.anthropic.com/v1/messages"
         
@@ -52,6 +52,30 @@ class SelfHealingDaemon:
                         capture_output=True, text=True, check=False
                     )
                     status = "active" if result.returncode == 0 else "inactive"
+                elif service == "vpn":
+                    # Check VPN status by checking if vpn0 interface is UP
+                    # First try with the real interface
+                    result = subprocess.run(
+                        ["ip", "link", "show", "vpn0"],
+                        capture_output=True, text=True, check=False
+                    )
+                    
+                    # If real interface exists and is UP
+                    if result.returncode == 0 and "UP" in result.stdout:
+                        status = "active"
+                    else:
+                        # Check the status file as a fallback
+                        try:
+                            if os.path.exists("/var/run/vpn_status"):
+                                with open("/var/run/vpn_status", "r") as f:
+                                    vpn_status = f.read().strip()
+                                    status = "active" if vpn_status == "1" else "inactive"
+                            else:
+                                # No status file exists, consider inactive
+                                status = "inactive"
+                        except Exception as e:
+                            logger.error(f"Error reading VPN status file: {str(e)}")
+                            status = "inactive"
                 else:
                     status = "unknown"
                 
@@ -91,6 +115,15 @@ class SelfHealingDaemon:
                     capture_output=True, text=True, check=False
                 )
                 return result.stdout or "No Apache logs found"
+            elif service == "vpn":
+                # Get VPN logs
+                if os.path.exists("/var/log/self-healing/vpn_events.log"):
+                    result = subprocess.run(
+                        ["tail", "-n", str(lines), "/var/log/self-healing/vpn_events.log"],
+                        capture_output=True, text=True, check=False
+                    )
+                    return result.stdout or "No VPN logs found"
+                return "No VPN logs found"
             return "No logs available for this service"
         except Exception as e:
             logger.error(f"Error getting logs for {service}: {str(e)}")
@@ -109,13 +142,32 @@ class SelfHealingDaemon:
                 "anthropic-version": "2023-06-01"
             }
             
-            data = {
-                "model": "claude-3-7-sonnet-latest",
-                "max_tokens": 1000,
-                "messages": [
-                    {
-                        "role": "user", 
-                        "content": f"""You are a Linux system administrator AI. Analyze these logs for service '{service}' 
+            # Prepare custom prompt based on service type
+            if service == "vpn":
+                prompt = f"""You are a Linux system administrator AI. Analyze these logs for the VPN service '{service}' 
+which is currently showing status: {self.service_status[service]}.
+
+SERVICE: {service}
+CURRENT STATUS: {self.service_status[service]}
+
+RECENT LOGS:
+{logs}
+
+First, diagnose the problem. Then, suggest a fix using ONE of these safe commands:
+1. reconnect - /app/simulate-vpn.sh reconnect
+2. create - /app/simulate-vpn.sh create
+
+Format your response exactly like this:
+DIAGNOSIS: [your diagnosis here]
+COMMAND: [command name only - 'reconnect' or 'create']
+EXPLANATION: [why this command will fix the issue]
+
+Only suggest one of the listed commands. If you're unsure or none of these would help, respond with:
+DIAGNOSIS: [your diagnosis here]
+COMMAND: none
+EXPLANATION: [why more complex intervention is needed]"""
+            else:
+                prompt = f"""You are a Linux system administrator AI. Analyze these logs for service '{service}' 
 which is currently showing status: {self.service_status[service]}.
 
 SERVICE: {service}
@@ -137,6 +189,14 @@ Only suggest one of the listed commands. If you're unsure or none of these would
 DIAGNOSIS: [your diagnosis here]
 COMMAND: none
 EXPLANATION: [why more complex intervention is needed]"""
+            
+            data = {
+                "model": "claude-3-7-sonnet-latest",
+                "max_tokens": 1000,
+                "messages": [
+                    {
+                        "role": "user", 
+                        "content": prompt
                     }
                 ]
             }
@@ -170,6 +230,10 @@ EXPLANATION: Starting the SSH service should restore SSH connectivity"""
             return """DIAGNOSIS: The Apache web server is not running
 COMMAND: start
 EXPLANATION: Starting the Apache service will restore web server functionality"""
+        elif service == "vpn":
+            return """DIAGNOSIS: The VPN connection is down or disconnected
+COMMAND: reconnect
+EXPLANATION: Reconnecting the VPN interface should restore connectivity"""
         else:
             return """DIAGNOSIS: Unknown service issue
 COMMAND: none
@@ -194,10 +258,16 @@ EXPLANATION: Cannot determine appropriate fix for this service"""
             return False
             
         # Map of safe commands
-        safe_commands = {
-            "restart": ["service", service, "restart"],
-            "start": ["service", service, "start"]
-        }
+        if service == "vpn":
+            safe_commands = {
+                "reconnect": ["/app/simulate-vpn.sh", "reconnect"],
+                "create": ["/app/simulate-vpn.sh", "create"]
+            }
+        else:
+            safe_commands = {
+                "restart": ["service", service, "restart"],
+                "start": ["service", service, "start"]
+            }
         
         if command not in safe_commands:
             logger.warning(f"Unsupported command: {command}")
