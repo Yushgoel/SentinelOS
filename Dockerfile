@@ -43,8 +43,5 @@ RUN chmod +x /app/break-service.sh
 EXPOSE 22
 EXPOSE 80
 
-# Set environment variable for the API key
-ENV CLAUDE_API_KEY="your_api_key_here"
-
 # Startup script 
 CMD ["/app/startup.sh"]
