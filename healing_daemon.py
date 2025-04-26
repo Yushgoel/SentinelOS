@@ -9,6 +9,9 @@ import sys
 import requests
 from datetime import datetime
 
+# Ensure log directory exists
+os.makedirs("/var/log/self-healing", exist_ok=True)
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -28,9 +31,9 @@ class SelfHealingDaemon:
         self.service_status = {}
         self.api_url = "https://api.anthropic.com/v1/messages"
         
-        # Create history directory if it doesn't exist
-        os.makedirs("/var/log/self-healing", exist_ok=True)
         logger.info("Self-Healing Daemon initialized")
+        if not api_key:
+            logger.warning("No API key provided - will use fallback diagnosis")
         
     def monitor_services(self):
         """Check the status of all monitored services"""
@@ -66,12 +69,23 @@ class SelfHealingDaemon:
         """Get logs for a service (simplified for demo)"""
         try:
             if service == "ssh":
+                # Create log file if it doesn't exist
+                if not os.path.exists("/var/log/auth.log"):
+                    with open("/var/log/auth.log", "w") as f:
+                        f.write("SSH log file created for demo\n")
+                
                 result = subprocess.run(
-                    ["grep", "sshd", "/var/log/auth.log"],
+                    ["cat", "/var/log/auth.log"],
                     capture_output=True, text=True, check=False
                 )
                 return result.stdout or "No SSH logs found"
             elif service == "apache2":
+                # Create log file if it doesn't exist
+                os.makedirs("/var/log/apache2", exist_ok=True)
+                if not os.path.exists("/var/log/apache2/error.log"):
+                    with open("/var/log/apache2/error.log", "w") as f:
+                        f.write("Apache error log file created for demo\n")
+                
                 result = subprocess.run(
                     ["cat", "/var/log/apache2/error.log"],
                     capture_output=True, text=True, check=False
@@ -85,8 +99,8 @@ class SelfHealingDaemon:
     def diagnose_issue(self, service, logs):
         """Use Claude to diagnose the issue"""
         if not self.api_key:
-            logger.error("No API key provided")
-            return "DIAGNOSIS: No API key provided\nCOMMAND: none\nEXPLANATION: API key required for AI diagnosis"
+            logger.warning("No API key provided - using fallback diagnosis")
+            return self._get_fallback_diagnosis(service)
         
         try:
             headers = {
@@ -96,7 +110,7 @@ class SelfHealingDaemon:
             }
             
             data = {
-                "model": "claude-3-sonnet-20240229",
+                "model": "claude-3-7-sonnet-latest",
                 "max_tokens": 1000,
                 "messages": [
                     {
@@ -138,8 +152,8 @@ EXPLANATION: [why more complex intervention is needed]"""
                     logger.error(f"API error: {response.status_code} - {response.text}")
                     # Fallback for demo
                     return self._get_fallback_diagnosis(service)
-            except requests.exceptions.RequestException:
-                logger.error("Could not connect to Claude API")
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Could not connect to Claude API: {str(e)}")
                 return self._get_fallback_diagnosis(service)
                 
         except Exception as e:

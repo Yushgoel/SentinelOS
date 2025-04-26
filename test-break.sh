@@ -22,7 +22,7 @@ python3 /app/healing_daemon.py &
 # Keep container running
 echo "Demo environment running. Use another terminal to interact with it."
 echo "View logs with: docker exec self-healing-demo tail -f /var/log/self-healing/daemon.log"
-echo "Break a service with: docker exec self-healing-demo /app/test-break.sh"
+echo "Break a service with: docker exec self-healing-demo /app/break-service.sh"
 
 # Keep container running
 tail -f /var/log/self-healing/daemon.log
