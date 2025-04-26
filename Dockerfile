@@ -33,14 +33,14 @@ COPY self-healing.service /etc/systemd/system/
 COPY startup.sh /app/
 COPY test-break.sh /app/
 COPY break-service.sh /app/
-COPY test-memory-pressure.sh /app/
+COPY test-essential-non-essential-memory-pressure.sh /app/
 
 # Make scripts executable
 RUN chmod +x /app/healing_daemon.py
 RUN chmod +x /app/startup.sh
 RUN chmod +x /app/test-break.sh
 RUN chmod +x /app/break-service.sh
-RUN chmod +x /app/test-memory-pressure.sh
+RUN chmod +x /app/test-essential-non-essential-memory-pressure.sh
 
 # Expose SSH port
 EXPOSE 22
