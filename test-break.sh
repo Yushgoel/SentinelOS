@@ -16,6 +16,8 @@ echo "Logging service started"
 echo "Setting up VPN interface..."
 chmod +x /app/simulate-vpn.sh
 chmod +x /app/break-vpn.sh
+chmod +x /app/break-vpn-firewall.sh
+chmod +x /app/test-vpn-firewall-fix.sh
 /app/simulate-vpn.sh create
 echo "VPN interface created"
 
@@ -31,6 +33,8 @@ echo "Demo environment running. Use another terminal to interact with it."
 echo "View logs with: docker exec self-healing-demo tail -f /var/log/self-healing/daemon.log"
 echo "Break a service with: docker exec self-healing-demo /app/break-service.sh"
 echo "Break VPN with: docker exec self-healing-demo /app/break-vpn.sh"
+echo "Break VPN with firewall kill-switch: docker exec self-healing-demo /app/break-vpn-firewall.sh"
+echo "Test VPN firewall kill-switch fix: docker exec self-healing-demo /app/test-vpn-firewall-fix.sh"
 
 # Keep container running
 tail -f /var/log/self-healing/daemon.log

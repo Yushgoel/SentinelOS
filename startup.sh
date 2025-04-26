@@ -31,6 +31,8 @@ echo "Demo environment running. Use another terminal to interact with it."
 echo "View logs with: docker exec self-healing-demo tail -f /var/log/self-healing/daemon.log"
 echo "Break a service with: docker exec self-healing-demo /app/break-service.sh"
 echo "Break VPN with: docker exec self-healing-demo /app/break-vpn.sh"
+echo "Break VPN with firewall kill-switch: docker exec self-healing-demo /app/break-vpn-firewall.sh"
+echo "Test VPN firewall kill-switch fix: docker exec self-healing-demo /app/test-vpn-firewall-fix.sh"
 echo "Debug random service selection: docker exec self-healing-demo /app/check-random.sh"
 
 # Watch the log file instead of trying to tail a non-existent file

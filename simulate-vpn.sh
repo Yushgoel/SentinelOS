@@ -147,9 +147,9 @@ show_help() {
 
 # Main logic based on command line argument
 case "$1" in
-    create)
-        create_vpn
-        ;;
+    # create)
+    #     create_vpn
+    #     ;;
     disconnect)
         disconnect_vpn
         ;;

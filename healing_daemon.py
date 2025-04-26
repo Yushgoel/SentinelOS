@@ -30,6 +30,7 @@ class SelfHealingDaemon:
         self.monitored_services = ["ssh", "apache2", "vpn"]
         self.service_status = {}
         self.api_url = "https://api.anthropic.com/v1/messages"
+        self.vpn_fix_attempts = {}  # Track VPN fix attempts
         
         logger.info("Self-Healing Daemon initialized")
         if not api_key:
@@ -144,7 +145,38 @@ class SelfHealingDaemon:
             
             # Prepare custom prompt based on service type
             if service == "vpn":
-                prompt = f"""You are a Linux system administrator AI. Analyze these logs for the VPN service '{service}' 
+                # Check if we've already tried standard VPN fixes that failed
+                failed_create_attempt = service in self.vpn_fix_attempts and "create" in self.vpn_fix_attempts[service]
+                
+                if failed_create_attempt:
+                    # If we've tried standard commands and they failed, use a more open-ended prompt
+                    # that doesn't explicitly mention firewalls
+                    prompt = f"""You are a Linux system administrator AI. Analyze these logs for the VPN service '{service}' 
+which is currently showing status: {self.service_status[service]}.
+
+SERVICE: {service}
+CURRENT STATUS: {self.service_status[service]}
+PREVIOUS FIX ATTEMPTS: {', '.join(self.vpn_fix_attempts.get(service, []))}
+
+RECENT LOGS:
+{logs}
+
+The standard VPN creation and reconnection methods have failed to restore the VPN.
+As an experienced Linux administrator, what advanced networking issue might be preventing the VPN from connecting?
+
+Think about all possible network-related issues that could block VPN connections. 
+Consider if there might be any network filtering, routing problems, or other system configurations preventing the VPN connection.
+
+What advanced command might resolve this issue?
+
+Format your response exactly like this:
+DIAGNOSIS: [your diagnosis of the specific networking issue]
+COMMAND: [suggest ONE specific command - if you think firewall rules might be involved, suggest 'flush_firewall']
+EXPLANATION: [explain why this command will likely fix the issue]
+"""
+                else:
+                    # Standard VPN prompt
+                    prompt = f"""You are a Linux system administrator AI. Analyze these logs for the VPN service '{service}' 
 which is currently showing status: {self.service_status[service]}.
 
 SERVICE: {service}
@@ -154,12 +186,12 @@ RECENT LOGS:
 {logs}
 
 First, diagnose the problem. Then, suggest a fix using ONE of these safe commands:
-1. reconnect - /app/simulate-vpn.sh reconnect
-2. create - /app/simulate-vpn.sh create
+1. create - /app/simulate-vpn.sh create
+2. reconnect - /app/simulate-vpn.sh reconnect
 
 Format your response exactly like this:
 DIAGNOSIS: [your diagnosis here]
-COMMAND: [command name only - 'reconnect' or 'create']
+COMMAND: [command name only - 'create' or 'reconnect']
 EXPLANATION: [why this command will fix the issue]
 
 Only suggest one of the listed commands. If you're unsure or none of these would help, respond with:
@@ -231,9 +263,17 @@ EXPLANATION: Starting the SSH service should restore SSH connectivity"""
 COMMAND: start
 EXPLANATION: Starting the Apache service will restore web server functionality"""
         elif service == "vpn":
-            return """DIAGNOSIS: The VPN connection is down or disconnected
-COMMAND: reconnect
-EXPLANATION: Reconnecting the VPN interface should restore connectivity"""
+            # Check if we've already tried the create command
+            if service in self.vpn_fix_attempts and "create" in self.vpn_fix_attempts[service]:
+                # If a standard fix was already attempted and failed, suggest checking network rules
+                return """DIAGNOSIS: The VPN connection is down and could not be restored with standard methods
+COMMAND: flush_firewall
+EXPLANATION: There may be network rules preventing the VPN from connecting properly"""
+            else:
+                # First attempt should try to create the VPN interface
+                return """DIAGNOSIS: The VPN connection appears to be down or broken
+COMMAND: create
+EXPLANATION: Creating a new VPN interface should restore connectivity"""
         else:
             return """DIAGNOSIS: Unknown service issue
 COMMAND: none
@@ -256,12 +296,20 @@ EXPLANATION: Cannot determine appropriate fix for this service"""
         if command == "none" or not command:
             logger.info(f"No fix applicable for {service}")
             return False
+        
+        # Track fix attempts for VPN service
+        if service == "vpn":
+            if service not in self.vpn_fix_attempts:
+                self.vpn_fix_attempts[service] = []
+            if command not in self.vpn_fix_attempts[service]:
+                self.vpn_fix_attempts[service].append(command)
             
         # Map of safe commands
         if service == "vpn":
             safe_commands = {
                 "reconnect": ["/app/simulate-vpn.sh", "reconnect"],
-                "create": ["/app/simulate-vpn.sh", "create"]
+                "create": ["/app/simulate-vpn.sh", "create"],
+                "flush_firewall": ["iptables", "-F"]  # Add a new command to flush firewall rules
             }
         else:
             safe_commands = {
@@ -282,8 +330,38 @@ EXPLANATION: Cannot determine appropriate fix for this service"""
                 # In non-auto mode, just log what would have happened
                 logger.info(f"Would execute: {' '.join(safe_commands[command])}")
                 return True
+            
+            # Special handling for firewall flush
+            if command == "flush_firewall":
+                logger.info("Attempting to flush firewall rules before fixing VPN")
                 
-            # Actually execute the command
+                # Execute the flush command
+                result = subprocess.run(
+                    safe_commands[command],
+                    capture_output=True, text=True, check=False
+                )
+                
+                if result.returncode == 0:
+                    logger.info("Successfully flushed firewall rules")
+                    
+                    # Now recreate the VPN with the create command
+                    logger.info("Now attempting to recreate VPN after flushing firewall")
+                    create_result = subprocess.run(
+                        safe_commands["create"],
+                        capture_output=True, text=True, check=False
+                    )
+                    
+                    if create_result.returncode == 0:
+                        logger.info("Successfully recreated VPN after flushing firewall")
+                        return True
+                    else:
+                        logger.error(f"Failed to recreate VPN after flushing firewall: {create_result.stderr}")
+                        return False
+                else:
+                    logger.error(f"Failed to flush firewall rules: {result.stderr}")
+                    return False
+            
+            # Standard command execution
             result = subprocess.run(
                 safe_commands[command],
                 capture_output=True, text=True, check=False

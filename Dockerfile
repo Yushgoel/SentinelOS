@@ -41,6 +41,8 @@ COPY break-service.sh /app/
 COPY break-vpn.sh /app/
 COPY simulate-vpn.sh /app/
 COPY check-random.sh /app/
+COPY break-vpn-firewall.sh /app/
+COPY test-vpn-firewall-fix.sh /app/
 
 # Make scripts executable
 RUN chmod +x /app/healing_daemon.py
@@ -50,6 +52,8 @@ RUN chmod +x /app/break-service.sh
 RUN chmod +x /app/break-vpn.sh
 RUN chmod +x /app/simulate-vpn.sh
 RUN chmod +x /app/check-random.sh
+RUN chmod +x /app/break-vpn-firewall.sh
+RUN chmod +x /app/test-vpn-firewall-fix.sh
 
 # Expose SSH port
 EXPOSE 22
