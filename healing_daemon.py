@@ -30,6 +30,7 @@ class SelfHealingDaemon:
         self.monitored_services = ["ssh", "apache2"]
         self.service_status = {}
         self.api_url = "https://api.anthropic.com/v1/messages"
+        self.memory_threshold = 90  # Memory usage threshold percentage
         
         logger.info("Self-Healing Daemon initialized")
         if not api_key:
@@ -258,6 +259,192 @@ EXPLANATION: Cannot determine appropriate fix for this service"""
         
         return success
     
+    def check_memory_status(self):
+        """Check system memory status and return relevant information"""
+        try:
+            # Get memory info
+            with open('/proc/meminfo') as f:
+                mem_info = {}
+                for line in f:
+                    name, value = line.split(':')
+                    mem_info[name.strip()] = int(value.strip().split()[0])  # Values are in kB
+            
+            total = mem_info['MemTotal']
+            available = mem_info['MemAvailable']
+            used_percent = ((total - available) / total) * 100
+
+            # Get dmesg output for OOM events
+            dmesg_output = subprocess.run(
+                ["dmesg", "-T"], 
+                capture_output=True, 
+                text=True, 
+                check=False
+            ).stdout
+
+            # Get top memory consuming processes
+            ps_output = subprocess.run(
+                ["ps", "aux", "--sort=-%mem"], 
+                capture_output=True, 
+                text=True, 
+                check=False
+            ).stdout
+
+            return {
+                'used_percent': used_percent,
+                'dmesg': dmesg_output,
+                'top_processes': ps_output,
+                'is_critical': used_percent > self.memory_threshold
+            }
+        except Exception as e:
+            logger.error(f"Error checking memory status: {str(e)}")
+            return None
+
+    def handle_memory_issue(self, memory_status):
+        """Handle memory issues by analyzing and taking action"""
+        if not memory_status:
+            return False
+
+        try:
+            # Prepare system information for diagnosis
+            system_info = f"""
+Memory Usage: {memory_status['used_percent']:.2f}%
+
+Recent dmesg output:
+{memory_status['dmesg'][-1000:]}  # Last 1000 chars
+
+Top Memory-Consuming Processes:
+{memory_status['top_processes']}
+"""
+            # Get AI diagnosis
+            diagnosis = self.diagnose_memory_issue(system_info)
+            
+            # Parse and execute recommended actions
+            success = self.execute_memory_actions(diagnosis)
+            
+            # Log the event
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            with open(f"/var/log/self-healing/memory_{timestamp}.log", "w") as f:
+                f.write(f"=== MEMORY ISSUE ===\n")
+                f.write(f"=== SYSTEM INFO ===\n{system_info}\n")
+                f.write(f"=== DIAGNOSIS ===\n{diagnosis}\n")
+                f.write(f"=== RESULT ===\n{'SUCCESS' if success else 'FAILED'}\n")
+            
+            return success
+
+        except Exception as e:
+            logger.error(f"Error handling memory issue: {str(e)}")
+            return False
+
+    def diagnose_memory_issue(self, system_info):
+        """Use Claude to diagnose memory issues and suggest actions"""
+        if not self.api_key:
+            return self._get_fallback_memory_diagnosis()
+
+        try:
+            headers = {
+                "x-api-key": self.api_key,
+                "content-type": "application/json",
+                "anthropic-version": "2023-06-01"
+            }
+            
+            data = {
+                "model": "claude-3-7-sonnet-latest",
+                "max_tokens": 1000,
+                "messages": [{
+                    "role": "user",
+                    "content": f"""You are a Linux system administrator AI. Analyze this system memory information and suggest actions:
+
+{system_info}
+
+Suggest actions using ONLY these safe commands:
+1. kill [PID] - Kill a specific process
+2. service [name] stop - Stop a non-essential service
+
+Format your response exactly like this:
+DIAGNOSIS: [your diagnosis of the memory issue]
+ACTIONS:
+- [command with specific PID or service name]
+- [another command if needed]
+EXPLANATION: [why these actions will help]
+
+Only suggest killing processes that are clearly non-essential (avoid system processes).
+If no safe action is possible, respond with:
+DIAGNOSIS: [your diagnosis]
+ACTIONS: none
+EXPLANATION: [why automated intervention is not safe]"""
+                }]
+            }
+
+            response = requests.post(self.api_url, headers=headers, json=data, timeout=10)
+            if response.status_code == 200:
+                content = response.json()["content"][0]["text"]
+                logger.info(f"AI memory diagnosis: {content}")
+                return content
+            else:
+                logger.error(f"API error: {response.status_code} - {response.text}")
+                return self._get_fallback_memory_diagnosis()
+
+        except Exception as e:
+            logger.error(f"Error getting memory diagnosis: {str(e)}")
+            return self._get_fallback_memory_diagnosis()
+
+    def _get_fallback_memory_diagnosis(self):
+        """Fallback memory diagnosis when API is unavailable"""
+        return """DIAGNOSIS: High memory usage detected
+ACTIONS: none
+EXPLANATION: Cannot safely determine which processes to terminate without AI analysis"""
+
+    def execute_memory_actions(self, diagnosis):
+        """Execute the recommended memory actions"""
+        try:
+            lines = diagnosis.split("\n")
+            actions = []
+            in_actions = False
+            
+            for line in lines:
+                if line.startswith("ACTIONS:"):
+                    in_actions = True
+                    continue
+                elif line.startswith("EXPLANATION:"):
+                    break
+                elif in_actions and line.strip().startswith("-"):
+                    action = line.strip("- ").strip()
+                    if action.lower() != "none":
+                        actions.append(action)
+
+            if not actions:
+                logger.info("No memory actions to execute")
+                return True
+
+            success = True
+            for action in actions:
+                try:
+                    if not self.auto_fix:
+                        logger.info(f"Would execute: {action}")
+                        continue
+
+                    parts = action.split()
+                    if parts[0] == "kill":
+                        pid = int(parts[1])
+                        subprocess.run(["kill", str(pid)], check=True)
+                        logger.info(f"Killed process {pid}")
+                    elif parts[0] == "service":
+                        service_name = parts[1]
+                        subprocess.run(["service", service_name, "stop"], check=True)
+                        logger.info(f"Stopped service {service_name}")
+                    else:
+                        logger.warning(f"Unsupported action: {action}")
+                        success = False
+                except Exception as e:
+                    logger.error(f"Error executing action '{action}': {str(e)}")
+                    success = False
+
+            return success
+
+        except Exception as e:
+            logger.error(f"Error executing memory actions: {str(e)}")
+            return False
+
     def run(self):
         """Main daemon loop"""
         logger.info("Starting self-healing daemon loop")
@@ -266,6 +453,13 @@ EXPLANATION: Cannot determine appropriate fix for this service"""
             try:
                 # Monitor all services
                 self.monitor_services()
+                
+                # Check memory status
+                memory_status = self.check_memory_status()
+                logger.info(f"Memory percentage used: {memory_status['used_percent']:.2f}%")
+                if memory_status and memory_status['is_critical']:
+                    logger.warning(f"Critical memory usage detected: {memory_status['used_percent']:.2f}%")
+                    self.handle_memory_issue(memory_status)
                 
                 # Check for failing services
                 for service, status in self.service_status.items():

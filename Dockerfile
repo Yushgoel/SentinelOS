@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     openssh-server \
     apache2 \
     procps \
+    stress-ng \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages
@@ -32,12 +33,14 @@ COPY self-healing.service /etc/systemd/system/
 COPY startup.sh /app/
 COPY test-break.sh /app/
 COPY break-service.sh /app/
+COPY test-memory-pressure.sh /app/
 
 # Make scripts executable
 RUN chmod +x /app/healing_daemon.py
 RUN chmod +x /app/startup.sh
 RUN chmod +x /app/test-break.sh
 RUN chmod +x /app/break-service.sh
+RUN chmod +x /app/test-memory-pressure.sh
 
 # Expose SSH port
 EXPOSE 22
