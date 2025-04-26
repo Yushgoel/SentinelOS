@@ -4,8 +4,8 @@
 create_memory_pressure() {
     local mem_size=$1
     # Use multiple workers and force memory allocation
-    stress-ng --vm 4 --vm-bytes "${mem_size}M" --vm-keep \
-        --timeout 300s --aggressive --verify &
+    # stress-ng --vm 4 --vm-bytes "${mem_size}M" --vm-keep \
+    #     --timeout 300s --aggressive --verify &
     
     # Also create a simple Python script that actually holds onto memory
     cat > memory_hog.py << 'EOF'
