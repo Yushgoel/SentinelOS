@@ -32,6 +32,12 @@ class SelfHealingDaemon:
         self.api_url = "https://api.anthropic.com/v1/messages"
         self.memory_threshold = 90  # Memory usage threshold percentage
         
+        # Add new attributes for dashboard data
+        self.memory_history = []
+        self.top_processes = []
+        self.claude_thoughts = []
+        self.max_history_points = 100  # Keep last 100 data points
+        
         logger.info("Self-Healing Daemon initialized")
         if not api_key:
             logger.warning("No API key provided - will use fallback diagnosis")
@@ -99,24 +105,24 @@ class SelfHealingDaemon:
     
     def diagnose_issue(self, service, logs):
         """Use Claude to diagnose the issue"""
+        diagnosis = None
         if not self.api_key:
-            logger.warning("No API key provided - using fallback diagnosis")
-            return self._get_fallback_diagnosis(service)
-        
-        try:
-            headers = {
-                "x-api-key": self.api_key,
-                "content-type": "application/json",
-                "anthropic-version": "2023-06-01"
-            }
-            
-            data = {
-                "model": "claude-3-7-sonnet-latest",
-                "max_tokens": 1000,
-                "messages": [
-                    {
-                        "role": "user", 
-                        "content": f"""You are a Linux system administrator AI. Analyze these logs for service '{service}' 
+            diagnosis = self._get_fallback_diagnosis(service)
+        else:
+            try:
+                headers = {
+                    "x-api-key": self.api_key,
+                    "content-type": "application/json",
+                    "anthropic-version": "2023-06-01"
+                }
+                
+                data = {
+                    "model": "claude-3-7-sonnet-latest",
+                    "max_tokens": 1000,
+                    "messages": [
+                        {
+                            "role": "user", 
+                            "content": f"""You are a Linux system administrator AI. Analyze these logs for service '{service}' 
 which is currently showing status: {self.service_status[service]}.
 
 SERVICE: {service}
@@ -138,28 +144,37 @@ Only suggest one of the listed commands. If you're unsure or none of these would
 DIAGNOSIS: [your diagnosis here]
 COMMAND: none
 EXPLANATION: [why more complex intervention is needed]"""
-                    }
-                ]
-            }
-            
-            # For demo purposes, if we can't reach the API, provide a canned response
-            try:
-                response = requests.post(self.api_url, headers=headers, json=data, timeout=10)
-                if response.status_code == 200:
-                    content = response.json()["content"][0]["text"]
-                    logger.info(f"AI diagnosis for {service}: {content}")
-                    return content
-                else:
-                    logger.error(f"API error: {response.status_code} - {response.text}")
-                    # Fallback for demo
-                    return self._get_fallback_diagnosis(service)
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Could not connect to Claude API: {str(e)}")
-                return self._get_fallback_diagnosis(service)
+                        }
+                    ]
+                }
                 
-        except Exception as e:
-            logger.error(f"Error diagnosing issue: {str(e)}")
-            return self._get_fallback_diagnosis(service)
+                # For demo purposes, if we can't reach the API, provide a canned response
+                try:
+                    response = requests.post(self.api_url, headers=headers, json=data, timeout=10)
+                    if response.status_code == 200:
+                        content = response.json()["content"][0]["text"]
+                        logger.info(f"AI diagnosis for {service}: {content}")
+                        diagnosis = content
+                    else:
+                        logger.error(f"API error: {response.status_code} - {response.text}")
+                        # Fallback for demo
+                        diagnosis = self._get_fallback_diagnosis(service)
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Could not connect to Claude API: {str(e)}")
+                    diagnosis = self._get_fallback_diagnosis(service)
+                
+            except Exception as e:
+                logger.error(f"Error diagnosing issue: {str(e)}")
+                diagnosis = self._get_fallback_diagnosis(service)
+        
+        # Store Claude's thoughts
+        self.claude_thoughts.append({
+            'timestamp': datetime.now(),
+            'type': 'service_diagnosis',
+            'service': service,
+            'diagnosis': diagnosis
+        })
+        return diagnosis
     
     def _get_fallback_diagnosis(self, service):
         """Fallback diagnosis for demo when API is unavailable"""
@@ -289,6 +304,22 @@ EXPLANATION: Cannot determine appropriate fix for this service"""
                 check=False
             ).stdout
 
+            # Store memory history
+            timestamp = datetime.now()
+            self.memory_history.append({
+                'timestamp': timestamp,
+                'used_percent': used_percent
+            })
+            
+            # Trim history if too long
+            if len(self.memory_history) > self.max_history_points:
+                self.memory_history.pop(0)
+            
+            # Store top processes
+            self.top_processes = [
+                line.split() for line in ps_output.strip().split('\n')[1:11]  # Store top 10 processes
+            ]
+
             return {
                 'used_percent': used_percent,
                 'dmesg': dmesg_output,
@@ -337,22 +368,23 @@ Top Memory-Consuming Processes:
 
     def diagnose_memory_issue(self, system_info):
         """Use Claude to diagnose memory issues and suggest actions"""
+        diagnosis = None
         if not self.api_key:
-            return self._get_fallback_memory_diagnosis()
-
-        try:
-            headers = {
-                "x-api-key": self.api_key,
-                "content-type": "application/json",
-                "anthropic-version": "2023-06-01"
-            }
-            
-            data = {
-                "model": "claude-3-7-sonnet-latest",
-                "max_tokens": 1000,
-                "messages": [{
-                    "role": "user",
-                    "content": f"""You are a Linux system administrator AI. Analyze this system memory information and suggest actions:
+            diagnosis = self._get_fallback_memory_diagnosis()
+        else:
+            try:
+                headers = {
+                    "x-api-key": self.api_key,
+                    "content-type": "application/json",
+                    "anthropic-version": "2023-06-01"
+                }
+                
+                data = {
+                    "model": "claude-3-7-sonnet-latest",
+                    "max_tokens": 1000,
+                    "messages": [{
+                        "role": "user",
+                        "content": f"""You are a Linux system administrator AI. Analyze this system memory information and suggest actions:
 
 {system_info}
 
@@ -372,21 +404,29 @@ If no safe action is possible, respond with:
 DIAGNOSIS: [your diagnosis]
 ACTIONS: none
 EXPLANATION: [why automated intervention is not safe]"""
-                }]
-            }
+                    }]
+                }
 
-            response = requests.post(self.api_url, headers=headers, json=data, timeout=10)
-            if response.status_code == 200:
-                content = response.json()["content"][0]["text"]
-                logger.info(f"AI memory diagnosis: {content}")
-                return content
-            else:
-                logger.error(f"API error: {response.status_code} - {response.text}")
-                return self._get_fallback_memory_diagnosis()
+                response = requests.post(self.api_url, headers=headers, json=data, timeout=10)
+                if response.status_code == 200:
+                    content = response.json()["content"][0]["text"]
+                    logger.info(f"AI memory diagnosis: {content}")
+                    diagnosis = content
+                else:
+                    logger.error(f"API error: {response.status_code} - {response.text}")
+                    diagnosis = self._get_fallback_memory_diagnosis()
 
-        except Exception as e:
-            logger.error(f"Error getting memory diagnosis: {str(e)}")
-            return self._get_fallback_memory_diagnosis()
+            except Exception as e:
+                logger.error(f"Error getting memory diagnosis: {str(e)}")
+                diagnosis = self._get_fallback_memory_diagnosis()
+        
+        # Store Claude's thoughts
+        self.claude_thoughts.append({
+            'timestamp': datetime.now(),
+            'type': 'memory_diagnosis',
+            'diagnosis': diagnosis
+        })
+        return diagnosis
 
     def _get_fallback_memory_diagnosis(self):
         """Fallback memory diagnosis when API is unavailable"""
@@ -445,6 +485,37 @@ EXPLANATION: Cannot safely determine which processes to terminate without AI ana
             logger.error(f"Error executing memory actions: {str(e)}")
             return False
 
+    # Add methods to get dashboard data
+    def get_dashboard_data(self):
+        """Get all data needed for the dashboard"""
+        data = {
+            'memory_history': [
+                {
+                    'timestamp': h['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
+                    'used_percent': h['used_percent']
+                } for h in self.memory_history
+            ],
+            'top_processes': self.top_processes,
+            'claude_thoughts': [
+                {
+                    'timestamp': t['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
+                    'type': t['type'],
+                    'diagnosis': t['diagnosis'],
+                    'service': t.get('service', '')
+                } for t in self.claude_thoughts
+            ],
+            'service_status': self.service_status
+        }
+        
+        # Write data to shared file
+        try:
+            with open('/var/log/self-healing/dashboard_data.json', 'w') as f:
+                json.dump(data, f)
+        except Exception as e:
+            logger.error(f"Error writing dashboard data: {str(e)}")
+        
+        return data
+
     def run(self):
         """Main daemon loop"""
         logger.info("Starting self-healing daemon loop")
@@ -466,6 +537,9 @@ EXPLANATION: Cannot safely determine which processes to terminate without AI ana
                     if status != "active":
                         logger.info(f"Detected failing service: {service} (status: {status})")
                         self.handle_failing_service(service)
+                
+                # Update dashboard data
+                self.get_dashboard_data()
                 
                 # Sleep before next check
                 time.sleep(10)  # Check every 10 seconds for demo

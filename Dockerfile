@@ -15,6 +15,9 @@ RUN apt-get update && apt-get install -y \
 # Install Python packages
 RUN pip3 install requests
 
+# Install streamlit
+RUN pip install streamlit pandas plotly
+
 # Set up SSH
 RUN mkdir /var/run/sshd
 RUN echo 'root:password' | chpasswd
@@ -35,6 +38,9 @@ COPY test-break.sh /app/
 COPY break-service.sh /app/
 COPY test-essential-non-essential-memory-pressure.sh /app/
 
+# Copy the dashboard file
+COPY dashboard.py /app/dashboard.py
+
 # Make scripts executable
 RUN chmod +x /app/healing_daemon.py
 RUN chmod +x /app/startup.sh
@@ -42,9 +48,10 @@ RUN chmod +x /app/test-break.sh
 RUN chmod +x /app/break-service.sh
 RUN chmod +x /app/test-essential-non-essential-memory-pressure.sh
 
-# Expose SSH port
+# Expose ports
 EXPOSE 22
 EXPOSE 80
+EXPOSE 8501
 
 # Startup script 
 CMD ["/app/startup.sh"]
