@@ -1,0 +1,13 @@
+[Unit]
+Description=AI Self-Healing Linux System
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/app/healing_daemon.py
+Environment="CLAUDE_API_KEY=%CLAUDE_API_KEY%"
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
