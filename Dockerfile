@@ -5,11 +5,9 @@ RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     nano \
-    systemd \
     curl \
     openssh-server \
     apache2 \
-    rsyslog \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
@@ -20,6 +18,9 @@ RUN pip3 install requests
 RUN mkdir /var/run/sshd
 RUN echo 'root:password' | chpasswd
 RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+
+# Configure Apache to suppress the "server name" warning
+RUN echo "ServerName localhost" >> /etc/apache2/apache2.conf
 
 # Create directories for our service
 RUN mkdir -p /var/log/self-healing
