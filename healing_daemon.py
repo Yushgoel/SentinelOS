@@ -463,6 +463,22 @@ EXPLANATION: Cannot safely determine which processes to terminate without AI ana
             logger.error(f"Error executing memory actions: {str(e)}")
             return False
 
+
+    def save_status(self):
+        """Save current status to a file for the dashboard"""
+        try:
+            status = {
+                'memory_usage': self.memory_status['used_percent'] if hasattr(self, 'memory_status') else 0,
+                'service_status': self.service_status,
+                'top_processes': self.memory_status['top_processes'] if hasattr(self, 'memory_status') else '',
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            with open('/var/log/self-healing/status.json', 'w') as f:
+                json.dump(status, f)
+        except Exception as e:
+            logger.error(f"Error saving status: {str(e)}")
+
     def check_dns_resolution(self):
         """Check if DNS resolution is working by pinging google.com"""
         try:
@@ -727,6 +743,7 @@ DNS Check After: {'WORKING' if self.check_dns_resolution() else 'STILL FAILING'}
         finally:
             self.dns_fix_in_progress = False
 
+
     def run(self):
         """Main daemon loop"""
         logger.info("Starting self-healing daemon loop")
@@ -755,6 +772,9 @@ DNS Check After: {'WORKING' if self.check_dns_resolution() else 'STILL FAILING'}
                 
                 # Check memory status
                 memory_status = self.check_memory_status()
+
+                self.memory_status = memory_status  # Store for status updates
+                
                 if memory_status:
                     logger.info(f"Memory percentage used: {memory_status['used_percent']:.2f}%")
                     if memory_status['is_critical'] and not self.memory_fix_in_progress:
@@ -766,6 +786,9 @@ DNS Check After: {'WORKING' if self.check_dns_resolution() else 'STILL FAILING'}
                     if status != "active" and service not in self.services_being_fixed:
                         logger.info(f"Detected failing service: {service} (status: {status})")
                         self.handle_failing_service(service)
+                
+                # Save current status for dashboard
+                self.save_status()
                 
                 # Sleep before next check
                 time.sleep(10)  # Check every 10 seconds for demo

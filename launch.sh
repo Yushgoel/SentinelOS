@@ -16,6 +16,7 @@ echo "Starting self-healing demo container..."
 docker run -d --name self-healing-demo \
   -p 2222:22 \
   -p 8080:80 \
+  -p 8501:8501 \
   --env-file .env \
   self-healing-linux
 

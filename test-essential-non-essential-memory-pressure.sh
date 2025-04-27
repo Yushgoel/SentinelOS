@@ -4,8 +4,8 @@
 create_memory_pressure() {
     local mem_size=$1
     # Use multiple workers and force memory allocation
-    stress-ng --vm 4 --vm-bytes "${mem_size}M" --vm-keep \
-        --timeout 300s --aggressive --verify &
+    # stress-ng --vm 4 --vm-bytes "${mem_size}M" --vm-keep \
+    #     --timeout 300s --aggressive --verify &
     
     # Also create a simple Python script that actually holds onto memory
     cat > memory_hog.py << 'EOF'
@@ -15,8 +15,8 @@ import sys
 
 # Allocate memory in chunks to avoid sudden allocation
 chunks = []
-chunk_size = 100 * 1024 * 1024  # 100MB per chunk
-num_chunks = 10  # Total 1GB
+chunk_size = 200 * 1024 * 1024  # 200MB per chunk
+num_chunks = 10  # Total 2GB
 
 print("Starting memory allocation...")
 for i in range(num_chunks):
@@ -42,69 +42,61 @@ start_nginx_load() {
     # Install nginx, PHP and required extensions
     apt-get update && apt-get install -y nginx php-fpm php-gd apache2-utils
 
-    # Create a PHP file that performs memory-intensive operations
+    # Create a PHP file that maintains high memory usage
     cat > /var/www/html/memory.php << 'EOF'
 <?php
-ini_set('memory_limit', '1024M');
+ini_set('memory_limit', '2048M');  // 2GB limit
+session_start();
 
-// Create and manipulate large arrays
-$data = [];
-for ($i = 0; $i < 10; $i++) {
-    $chunk = [];
-    for ($j = 0; $j < 100000; $j++) {
-        $chunk[] = str_repeat('x', 1024); // 1KB per element
-    }
-    $data[] = $chunk;
-    echo "Allocated chunk " . ($i + 1) . "/10\n";
+if (!isset($_SESSION['memory_blocks'])) {
+    $_SESSION['memory_blocks'] = [];
+}
+
+// Function to get system memory info
+function getSystemMemoryInfo() {
+    $memInfo = file_get_contents('/proc/meminfo');
+    preg_match('/MemTotal:\s+(\d+)/', $memInfo, $matches);
+    $totalKB = isset($matches[1]) ? $matches[1] : 0;
+    return $totalKB * 1024; // Convert to bytes
+}
+
+// Target using about 40% of system memory
+$totalMemory = getSystemMemoryInfo();
+$targetMemory = $totalMemory * 0.4;
+$blockSize = 50 * 1024 * 1024; // 50MB blocks
+
+// Create and store large arrays in session
+while (memory_get_usage(true) < $targetMemory) {
+    $block = str_repeat('x', $blockSize);
+    $_SESSION['memory_blocks'][] = $block;
+    echo "Current memory usage: " . round(memory_get_usage(true) / 1024 / 1024) . "MB\n";
     flush();
 }
 
-// Generate and manipulate large images
-for ($i = 0; $i < 3; $i++) {
-    $width = 4096;
-    $height = 4096;
-    $image = imagecreatetruecolor($width, $height);
-    
-    // Fill with random pixels
-    for ($x = 0; $x < $width; $x += 2) {
-        for ($y = 0; $y < $height; $y += 2) {
-            $color = imagecolorallocate($image, rand(0, 255), rand(0, 255), rand(0, 255));
-            imagesetpixel($image, $x, $y, $color);
-        }
-    }
-    
-    // Apply filters
-    imagefilter($image, IMG_FILTER_GAUSSIAN_BLUR);
-    imagefilter($image, IMG_FILTER_SMOOTH, 5);
-    
-    $data[] = $image;
-    echo "Processed image " . ($i + 1) . "/3\n";
-    flush();
-}
-
-sleep(2);
-echo "Memory intensive operations completed\n";
+echo "Target memory usage achieved. Holding...\n";
+sleep(1);
 ?>
 EOF
 
-    # Configure nginx
+    # Configure nginx with higher limits
     cat > /etc/nginx/nginx.conf << 'EOF'
 user www-data;
-worker_processes auto;
+worker_processes 4;
 worker_rlimit_nofile 100000;
+pid /run/nginx.pid;
+
 events {
     worker_connections 4096;
+    multi_accept on;
 }
+
 http {
     include mime.types;
     default_type application/octet-stream;
     
-    client_body_buffer_size 10M;
     client_max_body_size 10M;
     client_body_timeout 300;
-    client_header_timeout 300;
     keepalive_timeout 300;
-    fastcgi_read_timeout 300;
     
     server {
         listen 80;
@@ -120,18 +112,21 @@ http {
 }
 EOF
 
-    # Configure PHP-FPM
+    # Configure PHP-FPM for higher memory limits and session handling
     cat > /etc/php/*/fpm/php.ini << 'EOF'
-memory_limit = 1024M
+memory_limit = 2048M
 max_execution_time = 300
+session.save_handler = files
+session.save_path = /var/lib/php/sessions
+session.gc_maxlifetime = 3600
 EOF
 
     # Restart services
     service php-fpm restart
     service nginx restart
 
-    # Start requests
-    for i in {1..3}; do
+    # Start multiple PHP-FPM workers to consume memory
+    for i in {1..4}; do
         curl http://localhost/memory.php &
     done
 }
