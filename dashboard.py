@@ -93,8 +93,8 @@ def load_recent_diagnoses():
         st.error(f"Error loading diagnoses: {e}")
     return diagnoses
 
-# Create layout
-col1, col2 = st.columns([2, 1])
+# Create layout with adjusted ratio (previously [2, 1])
+col1, col2 = st.columns([3, 2])
 
 # Main dashboard update loop
 if True:  # Replace while loop with if True for Streamlit
@@ -112,7 +112,7 @@ if True:  # Replace while loop with if True for Streamlit
                 'usage': data['memory_usage']
             })
             
-            # Keep only last 15 minutes of data (instead of hour)
+            # Keep only last 15 minutes of data
             fifteen_mins_ago = current_time.timestamp() - 900  # 15 minutes in seconds
             st.session_state.memory_history = [
                 entry for entry in st.session_state.memory_history 
@@ -122,20 +122,19 @@ if True:  # Replace while loop with if True for Streamlit
             # Create DataFrame and plot
             df = pd.DataFrame(st.session_state.memory_history)
             
-            # If we have data, set x-axis range to last 15 minutes
-            # If no data, create a range from current time to 15 minutes ago
+            # Convert timestamps to relative minutes ago
             if len(df) > 0:
-                x_range = [current_time - pd.Timedelta(minutes=15), current_time]
-            else:
-                x_range = [pd.Timestamp(fifteen_mins_ago * 1e9), pd.Timestamp(current_time)]
+                df['minutes_ago'] = (current_time - df['timestamp']).dt.total_seconds() / 60
             
-            fig = px.line(df, x='timestamp', y='usage',
+            fig = px.line(df, x='minutes_ago', y='usage',
                          title='Memory Usage % (Last 15 Minutes)',
-                         labels={'usage': 'Usage %', 'timestamp': 'Time'})
+                         labels={'usage': 'Usage %', 'minutes_ago': 'Minutes Ago'})
             
             fig.update_layout(
-                xaxis_range=x_range,
-                yaxis_range=[0, 100]
+                xaxis_range=[15, 0],  # Show 15 to 0 minutes ago, reversed
+                yaxis_range=[0, 100],
+                margin=dict(t=30, b=30),  # Reduce top and bottom margins
+                xaxis_title="Time (minutes ago)"
             )
             fig.update_traces(line_shape='spline', line_smoothing=0.8)
             st.plotly_chart(fig, use_container_width=True)
@@ -149,17 +148,20 @@ if True:  # Replace while loop with if True for Streamlit
             # Recent Claude Diagnoses
             st.subheader("🔧 Claude's System Patches")
             diagnoses = load_recent_diagnoses()
-            for diagnosis in diagnoses:
-                status_color = "🟢" if diagnosis['actions'] else "🟡"
-                with st.expander(f"{status_color} Patch applied at {diagnosis['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}"):
-                    if diagnosis['diagnosis']:
-                        st.markdown("**📊 System Analysis:**")
-                        st.markdown(f"```\n{diagnosis['diagnosis']}\n```")
-                    if diagnosis['actions']:
-                        st.markdown("**🛠️ Applied Fix:**")
-                        st.markdown(f"```bash\n{diagnosis['actions']}\n```")
-                    with st.expander("View Full Log"):
-                        st.text(diagnosis['full_content'])
+            if diagnoses:
+                for diagnosis in diagnoses:
+                    status_color = "🟢" if diagnosis['actions'] else "🟡"
+                    with st.expander(f"{status_color} Patch applied at {diagnosis['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}"):
+                        if diagnosis['diagnosis']:
+                            st.markdown("**📊 System Analysis:**")
+                            st.markdown(f"```\n{diagnosis['diagnosis']}\n```")
+                        if diagnosis['actions']:
+                            st.markdown("**🛠️ Applied Fix:**")
+                            st.markdown(f"```bash\n{diagnosis['actions']}\n```")
+                        if st.button(f"View Full Log", key=f"log_{diagnosis['timestamp'].timestamp()}"):
+                            st.code(diagnosis['full_content'])
+            else:
+                st.info("🎯 System is running smoothly - no patches needed!")
     
     time.sleep(2)  # Update every 2 seconds
     st.rerun()  # Use st.rerun() instead of experimental_rerun()

@@ -15,8 +15,8 @@ import sys
 
 # Allocate memory in chunks to avoid sudden allocation
 chunks = []
-chunk_size = 100 * 1024 * 1024  # 100MB per chunk
-num_chunks = 10  # Total 1GB
+chunk_size = 200 * 1024 * 1024  # 200MB per chunk
+num_chunks = 10  # Total 2GB
 
 print("Starting memory allocation...")
 for i in range(num_chunks):
