@@ -8,6 +8,7 @@ import os
 import sys
 import requests
 from datetime import datetime
+import socket
 
 # Ensure log directory exists
 os.makedirs("/var/log/self-healing", exist_ok=True)
@@ -31,6 +32,12 @@ class SelfHealingDaemon:
         self.service_status = {}
         self.api_url = "https://api.anthropic.com/v1/messages"
         self.memory_threshold = 90  # Memory usage threshold percentage
+        self.last_dns_check = 0  # Track when we last checked DNS
+        # Add tracking for services being fixed
+        self.services_being_fixed = set()
+        # Add tracking for memory and DNS fixes
+        self.memory_fix_in_progress = False
+        self.dns_fix_in_progress = False
         
         logger.info("Self-Healing Daemon initialized")
         if not api_key:
@@ -232,32 +239,43 @@ EXPLANATION: Cannot determine appropriate fix for this service"""
     
     def handle_failing_service(self, service):
         """Handle a failing service"""
-        logger.info(f"Handling failing service: {service}")
-        
-        # Get service logs
-        logs = self.get_service_logs(service)
-        
-        # Diagnose the issue
-        diagnosis = self.diagnose_issue(service, logs)
-        
-        # Save diagnosis and logs for reference
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        with open(f"/var/log/self-healing/{service}_{timestamp}.log", "w") as f:
-            f.write(f"=== SERVICE: {service} ===\n")
-            f.write(f"=== STATUS: {self.service_status[service]} ===\n")
-            f.write(f"=== LOGS ===\n{logs}\n\n")
-            f.write(f"=== DIAGNOSIS ===\n{diagnosis}\n")
-        
-        # Parse and apply fix
-        command = self.parse_diagnosis(diagnosis)
-        success = self.apply_fix(service, command)
-        
-        # Update the log with the result
-        with open(f"/var/log/self-healing/{service}_{timestamp}.log", "a") as f:
-            f.write(f"\n=== FIX COMMAND: {command} ===\n")
-            f.write(f"=== FIX RESULT: {'SUCCESS' if success else 'FAILED'} ===\n")
-        
-        return success
+        # Check if service is already being fixed
+        if service in self.services_being_fixed:
+            logger.info(f"Fix already in progress for {service}, skipping")
+            return False
+
+        try:
+            # Mark service as being fixed
+            self.services_being_fixed.add(service)
+            logger.info(f"Handling failing service: {service}")
+            
+            # Get service logs
+            logs = self.get_service_logs(service)
+            
+            # Diagnose the issue
+            diagnosis = self.diagnose_issue(service, logs)
+            
+            # Save diagnosis and logs for reference
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            with open(f"/var/log/self-healing/{service}_{timestamp}.log", "w") as f:
+                f.write(f"=== SERVICE: {service} ===\n")
+                f.write(f"=== STATUS: {self.service_status[service]} ===\n")
+                f.write(f"=== LOGS ===\n{logs}\n\n")
+                f.write(f"=== DIAGNOSIS ===\n{diagnosis}\n")
+            
+            # Parse and apply fix
+            command = self.parse_diagnosis(diagnosis)
+            success = self.apply_fix(service, command)
+            
+            # Update the log with the result
+            with open(f"/var/log/self-healing/{service}_{timestamp}.log", "a") as f:
+                f.write(f"\n=== FIX COMMAND: {command} ===\n")
+                f.write(f"=== FIX RESULT: {'SUCCESS' if success else 'FAILED'} ===\n")
+            
+            return success
+        finally:
+            # Always remove service from being fixed set
+            self.services_being_fixed.remove(service)
     
     def check_memory_status(self):
         """Check system memory status and return relevant information"""
@@ -301,10 +319,12 @@ EXPLANATION: Cannot determine appropriate fix for this service"""
 
     def handle_memory_issue(self, memory_status):
         """Handle memory issues by analyzing and taking action"""
-        if not memory_status:
+        if self.memory_fix_in_progress:
+            logger.info("Memory fix already in progress, skipping")
             return False
 
         try:
+            self.memory_fix_in_progress = True
             # Prepare system information for diagnosis
             system_info = f"""
 Memory Usage: {memory_status['used_percent']:.2f}%
@@ -330,10 +350,8 @@ Top Memory-Consuming Processes:
                 f.write(f"=== RESULT ===\n{'SUCCESS' if success else 'FAILED'}\n")
             
             return success
-
-        except Exception as e:
-            logger.error(f"Error handling memory issue: {str(e)}")
-            return False
+        finally:
+            self.memory_fix_in_progress = False
 
     def diagnose_memory_issue(self, system_info):
         """Use Claude to diagnose memory issues and suggest actions"""
@@ -375,7 +393,7 @@ EXPLANATION: [why automated intervention is not safe]"""
                 }]
             }
 
-            response = requests.post(self.api_url, headers=headers, json=data, timeout=10)
+            response = requests.post(self.api_url, headers=headers, json=data, verify=False, timeout=10)
             if response.status_code == 200:
                 content = response.json()["content"][0]["text"]
                 logger.info(f"AI memory diagnosis: {content}")
@@ -445,6 +463,7 @@ EXPLANATION: Cannot safely determine which processes to terminate without AI ana
             logger.error(f"Error executing memory actions: {str(e)}")
             return False
 
+
     def save_status(self):
         """Save current status to a file for the dashboard"""
         try:
@@ -460,27 +479,311 @@ EXPLANATION: Cannot safely determine which processes to terminate without AI ana
         except Exception as e:
             logger.error(f"Error saving status: {str(e)}")
 
+    def check_dns_resolution(self):
+        """Check if DNS resolution is working by pinging google.com"""
+        try:
+            result = subprocess.run(
+                ["ping", "-c", "1", "google.com"],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                logger.info("DNS resolution check: ping google.com SUCCESS")
+                return True
+            else:
+                logger.error(f"DNS resolution check failed: {result.stderr}")
+                return False
+        except Exception as e:
+            logger.error(f"Error checking DNS resolution: {str(e)}")
+            return False
+
+    def ping_ip(self):
+        """Ping 8.8.8.8 to check if IP connectivity is working"""
+        try:
+            result = subprocess.run(
+                ["ping", "-c", "1", "8.8.8.8"],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            
+            if result.returncode == 0:
+                logger.info("ping ip SUCCESS")
+                return True
+            else:
+                logger.info("ping ip FAILED")
+                return False
+        except Exception as e:
+            logger.error(f"Error pinging IP: {str(e)}")
+            return False
+
+    def check_resolv(self):
+        """Check and reset the resolv.conf file to known good values"""
+        try:
+            # Backup current resolv.conf if not already backed up
+            if not os.path.exists("/etc/resolv.conf.bak"):
+                logger.info("Creating backup of resolv.conf")
+                subprocess.run(["cp", "/etc/resolv.conf", "/etc/resolv.conf.bak"], check=False)
+            
+            # Read current content to check if it's already set correctly
+            with open("/etc/resolv.conf", "r") as f:
+                current_content = f.read()
+            
+            # Define good nameservers
+            good_nameservers = "nameserver 8.8.8.8\nnameserver 1.1.1.1\n"
+            
+            # Check if current content matches good nameservers
+            if good_nameservers in current_content:
+                logger.info("resolv.conf is correctly configured")
+                return True
+                
+            # Reset to known good nameservers
+            logger.info("Resetting resolv.conf to known good nameservers")
+            with open("/etc/resolv.conf", "w") as f:
+                f.write(good_nameservers)
+                
+            logger.info("resolv.conf has been reset")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error checking/resetting resolv.conf: {str(e)}")
+            return False
+
+    def diagnose_dns_issue(self, previous_attempts=None):
+        """Use Claude to diagnose DNS issues and recommend actions"""
+        if not self.api_key:
+            logger.warning("No API key provided - using fallback DNS diagnosis")
+            logger.info("DNS DIAGNOSIS: USING FALLBACK")
+            return self._get_fallback_dns_diagnosis()
+            
+        try:
+            # Gather diagnostic information
+            dns_status = "failed" if not self.check_dns_resolution() else "working"
+            
+            # Try to read resolv.conf
+            resolv_content = "Could not read resolv.conf"
+            try:
+                with open("/etc/resolv.conf", "r") as f:
+                    resolv_content = f.read()
+            except Exception as e:
+                logger.error(f"Error reading resolv.conf: {str(e)}")
+            
+
+            # Build the previous attempts section if any
+            previous_attempts_text = ""
+            if previous_attempts:
+                previous_attempts_text = "\nPREVIOUS ATTEMPTS:\n" + "\n".join(previous_attempts)
+
+            headers = {
+                "x-api-key": self.api_key,
+                "content-type": "application/json",
+                "anthropic-version": "2023-06-01"
+            }
+            
+            data = {
+                "model": "claude-3-7-sonnet-latest",
+                "max_tokens": 1000,
+                "messages": [{
+                    "role": "user",
+                    "content": f"""You are a Linux system network diagnostics expert. Analyze this DNS issue:
+
+DNS RESOLUTION STATUS: {dns_status} (ping google.com)
+
+RESOLV.CONF CONTENT:
+{resolv_content}
+
+RECENT DNS LOGS:
+{previous_attempts_text}
+
+You have two commands available to fix this issue:
+1. ping_ip - Tests connectivity to 8.8.8.8. This could help identify if it truly is a DNS issue with the resolv file or not
+2. check_resolv - If you are confident it's an issue in the resolv.conf file, you can reset it to use Google and Cloudflare DNS servers
+
+Before you run check_resolv, you should make sure ping_ip (which pings 8.8.8.8) is successful.
+Format your response exactly like this:
+DIAGNOSIS: [your diagnosis of the DNS issue, including analysis of previous attempts if any]
+COMMAND: [command name only - 'ping_ip' or 'check_resolv']
+EXPLANATION: [why this command will help diagnose or fix the issue]
+
+If neither command is appropriate, respond with:
+DIAGNOSIS: [your diagnosis]
+COMMAND: none
+EXPLANATION: [why these commands won't help]"""
+                }]
+            }
+            
+            try:
+                orig = socket.getaddrinfo
+                def fake_getaddrinfo(host, port, *args, **kw):
+                    if host == "api.anthropic.com":
+                        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ("160.79.104.21", port))]
+                    return orig(host, port, *args, **kw)
+
+                socket.getaddrinfo = fake_getaddrinfo
+                response = requests.post(self.api_url, headers=headers, json=data, timeout=10)
+                socket.getaddrinfo = orig
+                if response.status_code == 200:
+                    content = response.json()["content"][0]["text"]
+                    logger.info(f"AI DNS diagnosis: {content}")
+                    logger.info("DNS DIAGNOSIS: USING CLAUDE AI")
+                    return content
+                else:
+                    logger.error(f"API error: {response.status_code} - {response.text}")
+                    logger.info("DNS DIAGNOSIS: USING FALLBACK")
+                    return self._get_fallback_dns_diagnosis()
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Could not connect to Claude API: {str(e)}")
+                logger.info("DNS DIAGNOSIS: USING FALLBACK")
+                return self._get_fallback_dns_diagnosis()
+                
+        except Exception as e:
+            logger.error(f"Error diagnosing DNS issue: {str(e)}")
+            logger.info("DNS DIAGNOSIS: USING FALLBACK")
+            return self._get_fallback_dns_diagnosis()
+            
+    def _get_fallback_dns_diagnosis(self):
+        """Fallback DNS diagnosis when API is unavailable"""
+        return """DIAGNOSIS: DNS resolution issue detected
+COMMAND: check_resolv
+EXPLANATION: Resetting resolv.conf to known good nameservers should restore DNS functionality"""
+            
+    def parse_dns_diagnosis(self, diagnosis):
+        """Parse the AI DNS diagnosis to extract command"""
+        lines = diagnosis.split("\n")
+        command = "none"
+        
+        for line in lines:
+            if line.startswith("COMMAND:"):
+                command = line.replace("COMMAND:", "").strip()
+                break
+                
+        return command
+        
+    def fix_dns_issue(self):
+        """Diagnose and fix DNS issues using AI recommendations"""
+        if self.dns_fix_in_progress:
+            logger.info("DNS fix already in progress, skipping")
+            return False
+
+        try:
+            self.dns_fix_in_progress = True
+            logger.info("Diagnosing DNS issue...")
+            
+            attempts = 0
+            previous_attempts = []
+            
+            # Keep trying until DNS works or we hit max attempts
+            while not self.check_dns_resolution() and attempts < 3:
+                attempts += 1
+                logger.info(f"Fix attempt {attempts}")
+                
+                # Get diagnosis and wait for it to complete
+                diagnosis = self.diagnose_dns_issue(previous_attempts)
+                command = self.parse_dns_diagnosis(diagnosis)
+                
+                # Save diagnosis and attempt history
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                with open(f"/var/log/self-healing/dns_{timestamp}.log", "w") as f:
+                    f.write(f"=== DNS ISSUE - ATTEMPT {attempts} ===\n")
+                    if previous_attempts:
+                        f.write("=== PREVIOUS ATTEMPTS ===\n")
+                        for attempt in previous_attempts:
+                            f.write(f"{attempt}\n")
+                    f.write(f"=== CURRENT DIAGNOSIS ===\n{diagnosis}\n")
+                
+                # Execute the recommended fix and wait for completion
+                success = False
+                result_output = ""
+                
+                if command == "ping_ip":
+                    logger.info("Executing ping_ip command")
+                    success = self.ping_ip()
+                    result = subprocess.run(["ping", "-c", "1", "8.8.8.8"], 
+                                          capture_output=True, text=True, check=False)
+                    result_output = result.stdout + result.stderr
+                elif command == "check_resolv":
+                    logger.info("Executing check_resolv command")
+                    success = self.check_resolv()
+                    with open("/etc/resolv.conf", "r") as f:
+                        result_output = f.read()
+                else:
+                    logger.info("No fix action recommended")
+                    
+                # Record this attempt
+                attempt_record = f"""
+Attempt {attempts}:
+Command: {command}
+Output: {result_output}
+Result: {'SUCCESS' if success else 'FAILED'}
+DNS Check After: {'WORKING' if self.check_dns_resolution() else 'STILL FAILING'}
+"""
+                previous_attempts.append(attempt_record)
+                
+                # Update the log with the result
+                with open(f"/var/log/self-healing/dns_{timestamp}.log", "a") as f:
+                    f.write(f"\n=== FIX COMMAND: {command} ===\n")
+                    f.write(f"=== COMMAND OUTPUT ===\n{result_output}\n")
+                    f.write(f"=== FIX RESULT: {'SUCCESS' if success else 'FAILED'} ===\n")
+                
+                # Check if DNS is fixed
+                if self.check_dns_resolution():
+                    logger.info("DNS resolution fixed successfully")
+                    return True
+                
+                # Wait longer between attempts to ensure previous fix has time to take effect
+                time.sleep(5)  # Increased from 2 to 5 seconds
+            
+            if not self.check_dns_resolution():
+                logger.error("Failed to fix DNS after multiple attempts")
+                return False
+            
+            return True
+        finally:
+            self.dns_fix_in_progress = False
+
+
     def run(self):
         """Main daemon loop"""
         logger.info("Starting self-healing daemon loop")
+        current_time = time.time()
+        self.last_dns_check = current_time
         
         while True:
             try:
+                current_time = time.time()
+                
                 # Monitor all services
                 self.monitor_services()
                 
+                # Only check DNS if no fix is in progress
+                if not self.dns_fix_in_progress:
+                    # Check DNS resolution every 30 seconds
+                    if current_time - self.last_dns_check >= 30:
+                        logger.info("Performing scheduled DNS resolution check")
+                        dns_working = self.check_dns_resolution()
+                        if not dns_working:
+                            logger.warning("DNS resolution is not working, attempting to fix")
+                            self.fix_dns_issue()
+                        self.last_dns_check = current_time
+                else:
+                    logger.debug("Skipping DNS check - fix already in progress")
+                
                 # Check memory status
                 memory_status = self.check_memory_status()
+
                 self.memory_status = memory_status  # Store for status updates
                 
-                logger.info(f"Memory percentage used: {memory_status['used_percent']:.2f}%")
-                if memory_status and memory_status['is_critical']:
-                    logger.warning(f"Critical memory usage detected: {memory_status['used_percent']:.2f}%")
-                    self.handle_memory_issue(memory_status)
+                if memory_status:
+                    logger.info(f"Memory percentage used: {memory_status['used_percent']:.2f}%")
+                    if memory_status['is_critical'] and not self.memory_fix_in_progress:
+                        logger.warning(f"Critical memory usage detected: {memory_status['used_percent']:.2f}%")
+                        self.handle_memory_issue(memory_status)
                 
                 # Check for failing services
                 for service, status in self.service_status.items():
-                    if status != "active":
+                    if status != "active" and service not in self.services_being_fixed:
                         logger.info(f"Detected failing service: {service} (status: {status})")
                         self.handle_failing_service(service)
                 

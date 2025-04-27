@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     apache2 \
     procps \
     stress-ng \
+    iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages
@@ -34,6 +35,7 @@ COPY self-healing.service /etc/systemd/system/
 COPY startup.sh /app/
 COPY test-break.sh /app/
 COPY break-service.sh /app/
+COPY break-dns.sh /app/
 COPY test-essential-non-essential-memory-pressure.sh /app/
 COPY dashboard.py /app/
 
@@ -42,6 +44,7 @@ RUN chmod +x /app/healing_daemon.py
 RUN chmod +x /app/startup.sh
 RUN chmod +x /app/test-break.sh
 RUN chmod +x /app/break-service.sh
+RUN chmod +x /app/break-dns.sh
 RUN chmod +x /app/test-essential-non-essential-memory-pressure.sh
 
 # Expose SSH port
