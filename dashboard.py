@@ -6,8 +6,35 @@ import plotly.express as px
 from datetime import datetime
 import os
 
-st.set_page_config(page_title="Self-Healing Linux Dashboard", layout="wide")
-st.title("Self-Healing Linux Dashboard")
+st.set_page_config(
+    page_title="SentinelOS Telemetry",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Add custom CSS for better styling
+st.markdown("""
+    <style>
+    .main {
+        padding: 2rem;
+    }
+    .stTitle {
+        color: #2E4B7C;
+        font-size: 2.5rem !important;
+        padding-bottom: 2rem;
+    }
+    .stSubheader {
+        color: #1E325C;
+        padding-top: 1rem;
+    }
+    .streamlit-expanderHeader {
+        background-color: #f0f2f6;
+        border-radius: 5px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+st.title("SentinelOS Telemetry")
 
 # Initialize session state for historical memory data
 if 'memory_history' not in st.session_state:
@@ -78,23 +105,39 @@ if True:  # Replace while loop with if True for Streamlit
             # Memory Usage Graph
             st.subheader("Memory Usage Over Time")
             
-            # Update memory history
+            # Update memory history with timestamp
+            current_time = datetime.now()
             st.session_state.memory_history.append({
-                'timestamp': datetime.now(),
+                'timestamp': current_time,
                 'usage': data['memory_usage']
             })
             
-            # Keep last 100 data points
-            if len(st.session_state.memory_history) > 100:
-                st.session_state.memory_history.pop(0)
+            # Keep only last 15 minutes of data (instead of hour)
+            fifteen_mins_ago = current_time.timestamp() - 900  # 15 minutes in seconds
+            st.session_state.memory_history = [
+                entry for entry in st.session_state.memory_history 
+                if entry['timestamp'].timestamp() > fifteen_mins_ago
+            ]
             
             # Create DataFrame and plot
             df = pd.DataFrame(st.session_state.memory_history)
-            fig = px.line(df, x='timestamp', y='usage', 
-                         title='Memory Usage %',
+            
+            # If we have data, set x-axis range to last 15 minutes
+            # If no data, create a range from current time to 15 minutes ago
+            if len(df) > 0:
+                x_range = [current_time - pd.Timedelta(minutes=15), current_time]
+            else:
+                x_range = [pd.Timestamp(fifteen_mins_ago * 1e9), pd.Timestamp(current_time)]
+            
+            fig = px.line(df, x='timestamp', y='usage',
+                         title='Memory Usage % (Last 15 Minutes)',
                          labels={'usage': 'Usage %', 'timestamp': 'Time'})
-            fig.update_yaxes(range=[0, 100])  # Fix y-axis range from 0 to 100
-            fig.update_traces(line_shape='spline', line_smoothing=0.8)  # Add smoothing
+            
+            fig.update_layout(
+                xaxis_range=x_range,
+                yaxis_range=[0, 100]
+            )
+            fig.update_traces(line_shape='spline', line_smoothing=0.8)
             st.plotly_chart(fig, use_container_width=True)
             
             # Top Memory Processes
@@ -104,18 +147,19 @@ if True:  # Replace while loop with if True for Streamlit
         
         with col2:
             # Recent Claude Diagnoses
-            st.subheader("Recent AI Diagnoses")
+            st.subheader("🔧 Claude's System Patches")
             diagnoses = load_recent_diagnoses()
             for diagnosis in diagnoses:
-                with st.expander(f"Diagnosis from {diagnosis['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}"):
+                status_color = "🟢" if diagnosis['actions'] else "🟡"
+                with st.expander(f"{status_color} Patch applied at {diagnosis['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}"):
                     if diagnosis['diagnosis']:
-                        st.markdown("**AI Diagnosis:**")
-                        st.text(diagnosis['diagnosis'])
+                        st.markdown("**📊 System Analysis:**")
+                        st.markdown(f"```\n{diagnosis['diagnosis']}\n```")
                     if diagnosis['actions']:
-                        st.markdown("**Recommended Actions:**")
-                        st.text(diagnosis['actions'])
-                    st.markdown("**Full Log:**")
-                    st.text(diagnosis['full_content'])
+                        st.markdown("**🛠️ Applied Fix:**")
+                        st.markdown(f"```bash\n{diagnosis['actions']}\n```")
+                    with st.expander("View Full Log"):
+                        st.text(diagnosis['full_content'])
     
     time.sleep(2)  # Update every 2 seconds
     st.rerun()  # Use st.rerun() instead of experimental_rerun()
